@@ -242,7 +242,7 @@ function exportCsv(a){if(a=='csv-players')dl('atletas.csv',csv([['Nome','Apelido
 render();(async()=>{try{await photosInit()}catch(e){console.warn(e)}render()})();
 </script><script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a45014286c8fd838',t:'MTc5MTA3MzgzNA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><iframe height="1" width="1" style="position: absolute; top: 0px; left: 0px; border-width: medium; border-style: none; border-color: currentcolor; border-image: none; visibility: hidden;"></iframe><iframe height="1" width="1" style="position: absolute; top: 0px; left: 0px; border-width: medium; border-style: none; border-color: currentcolor; border-image: none; visibility: hidden;"></iframe>
 <script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a4503ac0bd736e30',t:'MTc5MTA3NTQxNQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><iframe height="1" width="1" style="position: absolute; top: 0px; left: 0px; border-width: medium; border-style: none; border-color: currentcolor; border-image: none; visibility: hidden;"></iframe><script id="iacStoragePatch">
-/* ===== PATCH: diagnóstico de armazenamento + salvamento em arquivo ===== */
+/* ===== PATCH v2: armazenamento + espelho IndexedDB + arquivo local + NUVEM ===== */
 (function(){
 'use strict';
 try{document.querySelectorAll('#iacChip,#iacPanel,#iacBanner').forEach(function(n){n.remove()})}catch(e){}
@@ -252,30 +252,56 @@ try{document.body.style.paddingTop=''}catch(e){}
 var lsOK=true;
 try{localStorage.setItem('__iac_probe','1');if(localStorage.getItem('__iac_probe')!=='1')lsOK=false;localStorage.removeItem('__iac_probe')}catch(e){lsOK=false}
 
-/* ---- 2) Vínculo com arquivo .json no PC (File System Access API) ---- */
+/* ---- 2) NUVEM (Google Apps Script) ---- */
+var SYNC_INJ='__SYNC_URL__';
+var SYNC_TOKEN='iac2026-fx7Qp9-sinc';
+function syncUrl(){if(SYNC_INJ.indexOf('http')===0)return SYNC_INJ;try{return localStorage.getItem('iac_sync_url')||''}catch(e){return ''}}
+var cloudOn=!!syncUrl(),cloudState='off',cloudLast=null,pushTimer=null,pollTimer=null,pushing=false;
+
+function cloudGet(){return fetch(syncUrl()+'?action=load&t='+Date.now(),{method:'GET'}).then(function(r){return r.json()})}
+function cloudPayload(){var j;try{j=JSON.parse(JSON.stringify(db))}catch(e){j={}}try{if(Object.keys(PHOTOS||{}).length)j._photos=PHOTOS}catch(e){}return j}
+function cloudPush(){if(!syncUrl())return Promise.resolve(false);if(!canEdit())return Promise.resolve(false);pushing=true;cloudState='sending';updateChip();
+ return fetch(syncUrl(),{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({token:SYNC_TOKEN,data:cloudPayload()})})
+ .then(function(r){return r.json()}).then(function(j){pushing=false;if(j&&j.ok){cloudState='ok';cloudLast=new Date();updateChip();return true}cloudState='err';updateChip();console.warn('nuvem/salvar',j);return false})
+ .catch(function(e){pushing=false;cloudState='err';updateChip();console.warn('nuvem/salvar',e);return false})}
+function schedulePush(){if(!syncUrl()||!canEdit())return;clearTimeout(pushTimer);pushTimer=setTimeout(cloudPush,1800)}
+
+function userBusy(){try{if(edit.player||edit.game||edit.tx||edit.sponsor)return true}catch(e){}var a=document.activeElement;return !!(a&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))}
+function applyRemote(j,silent){var ph=j._photos||null;delete j._photos;db=norm(j);
+ if(ph){Object.keys(ph).forEach(function(k){try{PHOTOS[k]=ph[k];photoPut(k,ph[k])}catch(e){}})}
+ try{_save(0)}catch(e){}try{mirSet(JSON.stringify(db))}catch(e){}render();if(!silent)toast('Dados atualizados da nuvem.')}
+function cloudPull(silent){if(!syncUrl())return Promise.resolve(false);
+ return cloudGet().then(function(j){if(!j||typeof j!=='object')return false;
+  var rAt=+j.savedAt||0,cAt=0;try{cAt=+db.savedAt||0}catch(e){}
+  cloudState='ok';cloudLast=new Date();updateChip();
+  if(rAt>cAt){if(pushing)return false;if(userBusy()){setTimeout(function(){cloudPull(true)},20000);return false}applyRemote(j,silent);return true}
+  return false})
+ .catch(function(e){cloudState='err';updateChip();console.warn('nuvem/ler',e);return false})}
+function startPolling(){if(!syncUrl())return;clearInterval(pollTimer);pollTimer=setInterval(function(){if(document.visibilityState==='visible')cloudPull(false)},60000);
+ document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible')cloudPull(false)});
+ window.addEventListener('focus',function(){cloudPull(false)})}
+
+/* ---- 3) Espelho dos dados + handle de arquivo no IndexedDB ---- */
 var fsSupported=('showSaveFilePicker' in window);
 var fileHandle=null,fileName='',lastWrite=null,writeTimer=null,panelOpen=false;
 var FSDB='iac_fs_v2';
 function fsOpen(){return new Promise(function(res,rej){try{if(!window.indexedDB)return rej(new Error('sem idb'));var q=indexedDB.open(FSDB,1);q.onupgradeneeded=function(){var d=q.result;if(!d.objectStoreNames.contains('h'))d.createObjectStore('h')};q.onsuccess=function(){res(q.result)};q.onerror=function(){rej(q.error||new Error('idb'))}}catch(e){rej(e)}})}
-function fsGet(){return fsOpen().then(function(d){return new Promise(function(res,rej){var t=d.transaction('h','readonly'),g=t.objectStore('h').get('data');g.onsuccess=function(){res(g.result||null)};g.onerror=function(){rej(g.error)}})}).catch(function(){return null})}
-function fsSet(h){return fsOpen().then(function(d){return new Promise(function(res,rej){var t=d.transaction('h','readwrite');t.objectStore('h').put(h,'data');t.oncomplete=function(){res(true)};t.onerror=function(){rej(t.error)}})}).catch(function(){return false})}
-function mirSet(txt){return fsOpen().then(function(d){return new Promise(function(res,rej){var t=d.transaction('h','readwrite');t.objectStore('h').put(txt,'dbmirror');t.oncomplete=function(){res(true)};t.onerror=function(){rej(t.error)}})}).catch(function(){return false})}
-function mirGet(){return fsOpen().then(function(d){return new Promise(function(res,rej){var t=d.transaction('h','readonly'),g=t.objectStore('h').get('dbmirror');g.onsuccess=function(){res(g.result||null)};g.onerror=function(){rej(g.error)}})}).catch(function(){return null})}
-function fsClear(){return fsOpen().then(function(d){return new Promise(function(res){var t=d.transaction('h','readwrite');t.objectStore('h').delete('data');t.oncomplete=function(){res(true)};t.onerror=function(){res(false)}})}).catch(function(){return false})}
+function kvGet(k){return fsOpen().then(function(d){return new Promise(function(res,rej){var t=d.transaction('h','readonly'),g=t.objectStore('h').get(k);g.onsuccess=function(){res(g.result||null)};g.onerror=function(){rej(g.error)}})}).catch(function(){return null})}
+function kvSet(k,v){return fsOpen().then(function(d){return new Promise(function(res,rej){var t=d.transaction('h','readwrite');t.objectStore('h').put(v,k);t.oncomplete=function(){res(true)};t.onerror=function(){rej(t.error)}})}).catch(function(){return false})}
+function kvDel(k){return fsOpen().then(function(d){return new Promise(function(res){var t=d.transaction('h','readwrite');t.objectStore('h').delete(k);t.oncomplete=function(){res(true)};t.onerror=function(){res(false)}})}).catch(function(){return false})}
+function fsGet(){return kvGet('data')}function fsSet(h){return kvSet('data',h)}function fsClear(){return kvDel('data')}
+function mirSet(txt){return kvSet('dbmirror',txt)}function mirGet(){return kvGet('dbmirror')}
 
-function backupText(){var j;try{j=JSON.parse(JSON.stringify(db))}catch(e){j={}}try{if(Object.keys(PHOTOS||{}).length)j._photos=PHOTOS}catch(e){}return JSON.stringify(j)}
-
+function backupText(){return JSON.stringify(cloudPayload())}
 function writeFileNow(){if(!fileHandle)return Promise.resolve(false);
  return fileHandle.createWritable().then(function(w){return w.write(backupText()).then(function(){return w.close()})}).then(function(){lastWrite=new Date();updateChip();return true}).catch(function(e){console.warn('arquivo/salvar',e);lastWrite=false;updateChip();return false})}
 function scheduleWrite(){if(!fileHandle)return;clearTimeout(writeTimer);writeTimer=setTimeout(writeFileNow,700)}
 
-/* ---- 3) Intercepta o save() original: carimbo de hora + grava no arquivo ---- */
+/* ---- 4) Intercepta o save() original ---- */
 var _save=save;
-save=function(r){try{db.savedAt=Date.now()}catch(e){}_save(r===undefined?1:r);try{mirSet(JSON.stringify(db))}catch(e){}scheduleWrite()};
+save=function(r){try{db.savedAt=Date.now()}catch(e){}_save(r===undefined?1:r);try{mirSet(JSON.stringify(db))}catch(e){}scheduleWrite();schedulePush()};
 
-function applyData(j){var ph=j._photos||null;delete j._photos;db=norm(j);try{mirSet(JSON.stringify(db))}catch(e){}
- if(ph){Object.keys(ph).forEach(function(k){try{PHOTOS[k]=ph[k];photoPut(k,ph[k])}catch(e){}})}
- try{_save(0)}catch(e){}render()}
+function applyData(j){applyRemote(j,true)}
 
 function loadFromHandle(h,silent){return h.getFile().then(function(f){return f.text()}).then(function(txt){
  if(!txt||!txt.trim())return 'empty';
@@ -305,25 +331,31 @@ function openExistingFile(){if(!fsSupported){toast('Este navegador não suporta 
    return loadFromHandle(h,false).then(function(st){if(st==='invalid')toast('O arquivo escolhido não é um backup válido.');if(st==='kept')toast('Arquivo vinculado. Os dados atuais já são os mais recentes.');updateChip();renderPanel()})})})
  .catch(function(e){if(e&&e.name!=='AbortError')console.warn(e)})}
 
-function unlinkFile(){fileHandle=null;fileName='';fsClear();updateChip();renderPanel();toast('Arquivo desvinculado. Os dados seguem apenas no navegador.')}
+function unlinkFile(){fileHandle=null;fileName='';fsClear();updateChip();renderPanel();toast('Arquivo desvinculado.')}
 
-/* ---- 4) Interface: aviso + botão flutuante + painel ---- */
+/* ---- 5) Interface ---- */
 var css=document.createElement('style');
-css.textContent='#iacBanner{position:fixed;top:0;left:0;right:0;z-index:98;background:linear-gradient(90deg,#c9102e,#8f0a20);color:#fff;padding:10px 14px;font:700 13.5px/1.45 Inter,system-ui,Arial,sans-serif;box-shadow:0 8px 30px #0008;display:flex;gap:12px;align-items:center;flex-wrap:wrap}#iacBanner button{border:0;border-radius:10px;padding:8px 12px;font-weight:900;cursor:pointer;background:#fff;color:#8f0a20}#iacChip{position:fixed;left:16px;bottom:16px;z-index:97;border:1px solid #ffffff2e;border-radius:999px;padding:9px 14px;font:800 12.5px Inter,system-ui,Arial,sans-serif;cursor:pointer;display:flex;gap:7px;align-items:center;box-shadow:0 10px 30px #0007;backdrop-filter:blur(6px)}#iacChip.ok{background:#07321fd9;color:#bcffd9;border-color:#2fbf7166}#iacChip.warn{background:#3a2a05d9;color:#ffe8aa;border-color:#d8a62466}#iacChip.bad{background:#4a0a14e0;color:#ffd5da;border-color:#c9102e88;animation:iacPulse 1.6s infinite}@keyframes iacPulse{0%,100%{box-shadow:0 10px 30px #0007}50%{box-shadow:0 0 0 7px #c9102e33}}#iacPanel{position:fixed;inset:0;z-index:99;background:#02050ad9;display:grid;place-items:center;padding:16px;backdrop-filter:blur(8px)}#iacPanel .pc{width:min(520px,100%);max-height:92vh;overflow:auto;background:linear-gradient(180deg,#102f55,#061225);border:1px solid #dbe7ff24;border-radius:22px;box-shadow:0 22px 70px #0009;padding:20px;color:#f8fbff;font-family:Inter,system-ui,Arial,sans-serif}#iacPanel h3{margin:0 0 8px}#iacPanel p{color:#b6c2d4;line-height:1.5;margin:0 0 12px;font-size:13.5px}#iacPanel .st{border:1px solid #dbe7ff24;border-radius:14px;padding:11px 13px;margin-bottom:9px;font-size:13.5px;line-height:1.45;background:#ffffff08}#iacPanel .st.ok{border-color:#2fbf7155;background:#07321f55}#iacPanel .st.bad{border-color:#c9102e77;background:#4a0a1455}#iacPanel .bts{display:flex;gap:9px;flex-wrap:wrap;margin-top:12px}#iacPanel button{border:0;border-radius:12px;padding:10px 13px;font-weight:900;cursor:pointer;font-size:13px}#iacPanel .p{background:linear-gradient(135deg,#0b63b6,#e8f4ff);color:#061225}#iacPanel .s{background:#ffffff12;color:#fff;border:1px solid #dbe7ff24}#iacPanel .d{background:#c9102e26;color:#ffdce0;border:1px solid #c9102e66}#iacPanel code{background:#ffffff14;border-radius:6px;padding:1px 6px;font-size:12px}';
+css.textContent='#iacBanner{position:fixed;top:0;left:0;right:0;z-index:98;background:linear-gradient(90deg,#c9102e,#8f0a20);color:#fff;padding:10px 14px;font:700 13.5px/1.45 Inter,system-ui,Arial,sans-serif;box-shadow:0 8px 30px #0008;display:flex;gap:12px;align-items:center;flex-wrap:wrap}#iacBanner button{border:0;border-radius:10px;padding:8px 12px;font-weight:900;cursor:pointer;background:#fff;color:#8f0a20}#iacChip{position:fixed;left:16px;bottom:16px;z-index:97;border:1px solid #ffffff2e;border-radius:999px;padding:9px 14px;font:800 12.5px Inter,system-ui,Arial,sans-serif;cursor:pointer;display:flex;gap:7px;align-items:center;box-shadow:0 10px 30px #0007;backdrop-filter:blur(6px);max-width:78vw}#iacChip.ok{background:#07321fd9;color:#bcffd9;border-color:#2fbf7166}#iacChip.warn{background:#3a2a05d9;color:#ffe8aa;border-color:#d8a62466}#iacChip.bad{background:#4a0a14e0;color:#ffd5da;border-color:#c9102e88;animation:iacPulse 1.6s infinite}@keyframes iacPulse{0%,100%{box-shadow:0 10px 30px #0007}50%{box-shadow:0 0 0 7px #c9102e33}}#iacPanel{position:fixed;inset:0;z-index:99;background:#02050ad9;display:grid;place-items:center;padding:16px;backdrop-filter:blur(8px)}#iacPanel .pc{width:min(560px,100%);max-height:92vh;overflow:auto;background:linear-gradient(180deg,#102f55,#061225);border:1px solid #dbe7ff24;border-radius:22px;box-shadow:0 22px 70px #0009;padding:20px;color:#f8fbff;font-family:Inter,system-ui,Arial,sans-serif}#iacPanel h3{margin:0 0 8px}#iacPanel p{color:#b6c2d4;line-height:1.5;margin:0 0 12px;font-size:13.5px}#iacPanel .st{border:1px solid #dbe7ff24;border-radius:14px;padding:11px 13px;margin-bottom:9px;font-size:13.5px;line-height:1.45;background:#ffffff08}#iacPanel .st.ok{border-color:#2fbf7155;background:#07321f55}#iacPanel .st.bad{border-color:#c9102e77;background:#4a0a1455}#iacPanel .bts{display:flex;gap:9px;flex-wrap:wrap;margin-top:12px}#iacPanel button{border:0;border-radius:12px;padding:10px 13px;font-weight:900;cursor:pointer;font-size:13px}#iacPanel .p{background:linear-gradient(135deg,#0b63b6,#e8f4ff);color:#061225}#iacPanel .s{background:#ffffff12;color:#fff;border:1px solid #dbe7ff24}#iacPanel .d{background:#c9102e26;color:#ffdce0;border:1px solid #c9102e66}#iacPanel code{background:#ffffff14;border-radius:6px;padding:1px 6px;font-size:12px}#iacPanel input{width:100%;border:1px solid #ffffff22;border-radius:10px;background:#061225d9;color:#fff;padding:9px 10px;font-size:12.5px;margin-top:6px;box-sizing:border-box}';
 document.head.appendChild(css);
 
 var chip=document.createElement('div');chip.id='iacChip';document.body.appendChild(chip);
 chip.addEventListener('click',function(){panelOpen=true;renderPanel()});
 
 var banner=null;
-if(!lsOK){banner=document.createElement('div');banner.id='iacBanner';
- banner.innerHTML='⚠️ <span>O navegador está <u>bloqueando o salvamento</u> — os dados vão sumir ao atualizar a página!</span>';
+if(!lsOK&&!cloudOn){banner=document.createElement('div');banner.id='iacBanner';
+ banner.innerHTML='⚠️ <span>O navegador está <u>bloqueando o salvamento</u> — os dados podem sumir ao atualizar!</span>';
  var bb=document.createElement('button');bb.textContent='Resolver agora';bb.onclick=function(){panelOpen=true;renderPanel()};banner.appendChild(bb);
  document.body.appendChild(banner);document.body.style.paddingTop='54px'}
 
-function fmtH(d){return d&&d.toLocaleTimeString?d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'}):''}
+function fmtH(d){return d&&d.toLocaleTimeString?d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}):''}
 function updateChip(){var c,txt;
- if(fileHandle){c=lastWrite===false?'warn':'ok';txt=lastWrite===false?'⚠ Falha ao gravar em '+fileName+' — clique':'💾 '+fileName+(lastWrite?' · salvo '+fmtH(lastWrite):' · vinculado')}
+ if(syncUrl()){
+  if(cloudState==='err'){c='warn';txt='☁️⚠ Sem conexão com a nuvem — dados locais'}
+  else if(cloudState==='sending'){c='ok';txt='☁️ Enviando...'}
+  else if(cloudState==='ok'){c='ok';txt='☁️ Nuvem sincronizada'+(cloudLast?' · '+fmtH(cloudLast):'')}
+  else{c='warn';txt='☁️ Conectando à nuvem...'}
+ }
+ else if(fileHandle){c=lastWrite===false?'warn':'ok';txt=lastWrite===false?'⚠ Falha ao gravar em '+fileName:'💾 '+fileName+(lastWrite?' · salvo '+fmtH(lastWrite):'')}
  else if(!lsOK){c='bad';txt='⚠ DADOS NÃO ESTÃO SENDO SALVOS — clique aqui'}
  else{c='ok';txt='💾 Salvo no navegador'}
  chip.className=c;chip.textContent=txt}
@@ -331,34 +363,42 @@ function updateChip(){var c,txt;
 function renderPanel(){var old=document.getElementById('iacPanel');if(old)old.remove();if(!panelOpen)return;
  var ov=document.createElement('div');ov.id='iacPanel';var pc=document.createElement('div');pc.className='pc';ov.appendChild(pc);
  var h='<h3>💾 Situação do salvamento</h3>';
- h+=lsOK?'<div class="st ok">✅ <b>Armazenamento do navegador:</b> funcionando. Os dados ficam salvos neste navegador, neste computador.</div>'
-        :'<div class="st bad">❌ <b>Armazenamento do navegador: BLOQUEADO.</b> É por isso que os dados somem ao apertar F5. No Edge, verifique:<br>1. Abra <code>edge://settings/content/cookies</code> e deixe <b>ativado</b> "Permitir que os sites salvem e leiam dados de cookies";<br>2. Abra <code>edge://settings/clearBrowsingDataOnClose</code> e <b>desative</b> a limpeza de "Cookies e outros dados do site";<br>3. Verifique se um antivírus/limpador (CCleaner, Avast etc.) não está apagando dados de sites.</div>';
- h+=fileHandle?'<div class="st ok">✅ <b>Arquivo vinculado:</b> '+fileName+'. Toda alteração é gravada automaticamente também nesse arquivo no seu PC. '+(lastWrite&&lastWrite!==false?'Última gravação: '+fmtH(lastWrite)+'.':'')+'</div>'
-  :(fsSupported?'<div class="st">📁 <b>Proteção extra (recomendado):</b> vincule um arquivo <b>.json</b> no seu PC. Aí, mesmo que o navegador limpe tudo, seus dados ficam guardados no arquivo e são recuperados sozinhos.</div>'
-  :'<div class="st bad">Este navegador não suporta gravação direta em arquivo. Use o botão <b>Baixar backup JSON</b> na aba Backup com frequência.</div>');
- h+='<p>Dica: abra o site sempre a partir do <b>mesmo arquivo .html</b>, no <b>mesmo navegador</b>, e evite abas anônimas.</p>';
+ if(syncUrl()){h+=cloudState==='err'?'<div class="st bad">☁️ <b>Nuvem:</b> sem conexão no momento. Os dados estão guardados neste aparelho e serão enviados quando a internet voltar.</div>'
+  :'<div class="st ok">☁️ <b>Nuvem ativa!</b> Os dados ficam guardados no Google e aparecem iguais para todo mundo que abrir o site. '+(cloudLast?'Última sincronização: '+fmtH(cloudLast)+'.':'')+'</div>'}
+ else if(SYNC_INJ.indexOf('http')!==0){h+='<div class="st">☁️ <b>Nuvem não configurada neste arquivo.</b> Se você já tem o endereço da nuvem (link do Google Apps Script), cole abaixo:<input id="iacSyncUrl" placeholder="https://script.google.com/macros/s/..../exec"></div>'}
+ h+=lsOK?'<div class="st ok">✅ <b>Memória do navegador:</b> funcionando.</div>'
+        :'<div class="st bad">❌ <b>Memória do navegador bloqueada.</b> No Edge: ative os cookies em <code>edge://settings/content/cookies</code> e desative a limpeza automática em <code>edge://settings/clearBrowsingDataOnClose</code>.</div>';
+ if(!syncUrl()){h+=fileHandle?'<div class="st ok">✅ <b>Arquivo vinculado:</b> '+fileName+'.</div>'
+  :(fsSupported?'<div class="st">📁 Proteção extra: vincule um arquivo .json no seu PC como backup automático.</div>':'')}
  pc.innerHTML=h;
  var bts=document.createElement('div');bts.className='bts';
  function btn(cls,label,fn){var b=document.createElement('button');b.className=cls;b.textContent=label;b.onclick=fn;bts.appendChild(b)}
- if(fsSupported){if(!fileHandle){btn('p','📁 Vincular arquivo novo',linkNewFile);btn('s','📂 Abrir arquivo de dados existente',openExistingFile)}
-  else{btn('p','Gravar agora',function(){writeFileNow().then(function(ok){toast(ok?'Dados gravados em '+fileName+'.':'Falha ao gravar no arquivo.')})});btn('s','Trocar arquivo',linkNewFile);btn('d','Desvincular',unlinkFile)}}
+ if(syncUrl()){
+  btn('p','🔄 Buscar da nuvem agora',function(){cloudPull(false).then(function(ch){if(!ch)toast('Você já está com os dados mais recentes.')})});
+  if(canEdit())btn('s','⬆ Enviar para a nuvem agora',function(){cloudPush().then(function(ok){toast(ok?'Dados enviados para a nuvem!':'Falha ao enviar. Verifique a internet.')})});
+ }
+ if(SYNC_INJ.indexOf('http')!==0&&!syncUrl()){btn('p','Salvar endereço da nuvem',function(){var v=(document.getElementById('iacSyncUrl')||{}).value||'';v=v.trim();if(v.indexOf('http')!==0){toast('Cole o endereço completo, começando com https://');return}try{localStorage.setItem('iac_sync_url',v)}catch(e){}cloudOn=true;toast('Nuvem configurada!');cloudPull(false);startPolling();panelOpen=false;renderPanel();updateChip()})}
+ if(fsSupported&&!syncUrl()){if(!fileHandle){btn('s','📁 Vincular arquivo novo',linkNewFile);btn('s','📂 Abrir arquivo de dados',openExistingFile)}
+  else{btn('s','Gravar agora',function(){writeFileNow().then(function(ok){toast(ok?'Dados gravados em '+fileName+'.':'Falha ao gravar.')})});btn('s','Trocar arquivo',linkNewFile);btn('d','Desvincular',unlinkFile)}}
  btn('s','Fechar',function(){panelOpen=false;renderPanel()});
  pc.appendChild(bts);
  ov.addEventListener('click',function(e){if(e.target===ov){panelOpen=false;renderPanel()}});
  document.body.appendChild(ov)}
 
-/* ---- 5) Inicialização: reconectar arquivo salvo e avisar ---- */
+/* ---- 6) Inicialização ---- */
 updateChip();
 mirGet().then(function(txt){if(!txt)return;var j;try{j=JSON.parse(txt)}catch(e){return}
  var mAt=+j.savedAt||0,cAt=0;try{cAt=+db.savedAt||0}catch(e){}
- if(mAt>cAt){db=norm(j);try{_save(0)}catch(e){}render();toast('Dados recuperados do armazenamento interno do navegador.')}});
-fsGet().then(function(h){if(!h)return;
+ if(mAt>cAt){db=norm(j);try{_save(0)}catch(e){}render();toast('Dados recuperados do armazenamento interno do navegador.')}
+ if(syncUrl())cloudPull(true)});
+if(syncUrl()){cloudPull(true).then(function(){updateChip()});startPolling()}
+fsGet().then(function(h){if(!h||syncUrl())return;
  var q=h.queryPermission?h.queryPermission({mode:'readwrite'}):Promise.resolve('prompt');
  q.then(function(p){if(p==='granted'){connectHandle(h,false)}
   else{fileName=h.name||'dados.json';chip.className='warn';chip.textContent='📁 Clique para reativar o arquivo '+fileName;
    chip.onclick=function(){connectHandle(h,true).then(function(ok){if(ok)toast('Arquivo '+fileName+' reativado.');chip.onclick=function(){panelOpen=true;renderPanel()};updateChip()})}}})});
-if(!lsOK){try{toast('ATENÇÃO: o navegador está bloqueando o salvamento dos dados!')}catch(e){}}
+if(!lsOK&&!syncUrl()){try{toast('ATENÇÃO: o navegador está bloqueando o salvamento dos dados!')}catch(e){}}
 })();
-/* ===== fim do patch ===== */
+/* ===== fim do patch v2 ===== */
 
-</script><script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a45074f179dcf16d',t:'MTc5MTA3Nzc5OA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body></html>
+</script><script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a450a19989ea147b',t:'MTc5MTA3OTYyNw=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body></html>
